@@ -1,7 +1,7 @@
 
 #include "AssetsOperator.h"
 #include <stdio.h>
-
+#include <assert.h>
 
 CAssetsOperator::CAssetsOperator()
     : m_pFile(NULL)
@@ -71,7 +71,7 @@ void CAssetsOperator::ReadPackHead(PackHead& packHead)
     }
 }
 
-void CAssetsOperator::ReadFileEntry(std::set<FileEntry>& setFileEntry)
+void CAssetsOperator::ReadFileEntry(FileEntryPtr& setFileEntry)
 {
     if(!m_pFile)
     {
@@ -87,22 +87,23 @@ void CAssetsOperator::ReadFileEntry(std::set<FileEntry>& setFileEntry)
 
         if(err == 0)
         {
-            FileEntry entry;
-            int nReaded = fread(&entry, 1, nEntrySize, m_pFile);
+            FileEntry *entry =  new FileEntry;
+            int nReaded = fread(entry, 1, nEntrySize, m_pFile);
 
             if(nReaded == nEntrySize)
             {
-				setFileEntry.insert(entry);
+				addToFileCache(setFileEntry, entry->nNameHash, entry);
             }
 
             nEntryOffset += nEntrySize;
         }
     }
-
+	unsigned int file_size;
+	file_size = HASH_COUNT(setFileEntry);
     // 读取的文件入口信息和文件头记录的文件数量不一致,错误了
-	if (setFileEntry.size() != m_packHead.nFileAmount)
+	if (file_size != m_packHead.nFileAmount)
     {
-		setFileEntry.clear();
+		assert(0);
     }
 }
 
@@ -149,4 +150,31 @@ void CAssetsOperator::Close()
         m_packHead.nFileEntryOffset = 0;
         m_pFile = NULL;
     }
+}
+
+
+
+void CAssetsOperator::addToFileCache(FileEntryPtr &_fileEntryCache, uint id, FileEntry* data)
+{
+	struct UT_FileEntry_MAP *s;
+
+	s = (struct UT_FileEntry_MAP*)malloc(sizeof(struct UT_FileEntry_MAP));
+	s->id = id;
+	s->data = data;
+	HASH_ADD_INT(_fileEntryCache, id, s);
+}
+
+FileEntry* CAssetsOperator::findInFileCache(FileEntryPtr& _fileEntryCache,uint id)
+{
+	struct UT_FileEntry_MAP* s;
+	HASH_FIND_INT(_fileEntryCache, &id, s);
+	return s->data;
+}
+
+void CAssetsOperator::deleteInFileCache(FileEntryPtr& _fileEntryCache,uint id)
+{
+	struct UT_FileEntry_MAP* s;
+	HASH_FIND_INT(_fileEntryCache, &id, s);
+	HASH_DEL(_fileEntryCache, s);
+	free(s);
 }

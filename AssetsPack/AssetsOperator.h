@@ -24,14 +24,16 @@ public:
 
 	virtual void ReadPackHead(PackHead& packHead) override;
 
-	virtual void ReadFileEntry(std::set<FileEntry>& setFileEntry) override;
+	virtual void ReadFileEntry(FileEntryPtr& setFileEntry) override;
 
 	virtual uint Read(uchar* pBuffer, uint nOffset, uint nLen) override;
 
 	virtual uint Write(const uchar* pBuffer, uint nOffset, uint nLen) override;
 
 	virtual void Close() override;
-
+	void addToFileCache(FileEntryPtr &_fileEntryCache,uint id, FileEntry* data);
+	FileEntry* findInFileCache(FileEntryPtr& _fileEntryCache,uint id);
+	void deleteInFileCache(FileEntryPtr& _fileEntryCache,uint id);
 private:
 	FILE* m_pFile;
 	PackHead m_packHead;

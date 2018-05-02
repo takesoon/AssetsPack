@@ -40,12 +40,17 @@ public:
 
 private:
     FileEntry* GetDirtyEntry(uint nFileSize);
-
-private:
+	std::string replace(std::string str, const std::string& old_value, const std::string& new_value);
+public:
     bool m_bLoaded; // 是否已经加载资源包文件了
     IAssetsOperator* m_pAssetsOperator;
     PackHead m_packHead; // 资源包头部信息
-    std::set<FileEntry> m_setFileEntry; // 所有文件入口列表
+
+	void AddToFileCache(FileEntry* data);
+	FileEntry* FindInFileCache(uint id);
+	void DeleteInFileCache(uint id);
+	void CleanCache();
+	FileEntryPtr _fileEntryCache;
 };
 
 

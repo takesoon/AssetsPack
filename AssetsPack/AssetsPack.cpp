@@ -12,12 +12,13 @@ CAssetsPack::CAssetsPack(IAssetsOperator* pAssetsOperator)
 {
     m_packHead.nFileAmount = 0;
     m_packHead.nFileEntryOffset = sizeof(PackHead);
-    m_setFileEntry.clear();
+	_fileEntryCache = nullptr;
 }
 
 
 CAssetsPack::~CAssetsPack()
 {
+	CleanCache();
 }
 
 bool CAssetsPack::LoadPackFile(const char* pszAssetsPackFile)
@@ -34,59 +35,58 @@ bool CAssetsPack::LoadPackFile(const char* pszAssetsPackFile)
         return false;
     }
 
-    m_setFileEntry.clear();
+	CleanCache();
     m_pAssetsOperator->ReadPackHead(m_packHead);
-    m_pAssetsOperator->ReadFileEntry(m_setFileEntry);
+	m_pAssetsOperator->ReadFileEntry(_fileEntryCache);
 
     m_bLoaded = true;
 
     return true;
 }
 
+std::string  CAssetsPack::replace(std::string   str, const   std::string&   old_value, const   std::string&   new_value)
+{
+	for (std::string::size_type pos(0); pos != std::string::npos; pos += new_value.length())   {
+		if ((pos = str.find(old_value, pos)) != std::string::npos)
+			str.replace(pos, old_value.length(), new_value);
+		else   break;
+	}
+	return   str;
+}
+
 IFile* CAssetsPack::OpenFile(const char* pszFileName)
 {
-    uint nNameHash = XXHASH32(pszFileName);
-
-    FE_FOREACH(pEntry, m_setFileEntry)
-    {
-        if(pEntry->ucFlag != FF_DELETE && pEntry->nNameHash == nNameHash)
-        {
-            IFile* file = new(std::nothrow) CAssetsFile(m_pAssetsOperator, pEntry->nOffset, pEntry->nFileSize);
-            return file;
-        }
-    }
-
-    return NULL;
+	uint nNameHash = XXHASH32(pszFileName);
+	FileEntry * pEntry = FindInFileCache(nNameHash);
+	if (pEntry)
+	{
+		IFile* file = new(std::nothrow) CAssetsFile(m_pAssetsOperator, pEntry->nOffset, pEntry->nFileSize);
+		return file;
+	}
+	return nullptr;
 }
 
 bool CAssetsPack::IsFileExist(const char* pszFileName)
 {
     uint nNameHash = XXHASH32(pszFileName);
-
-    FE_FOREACH(pEntry, m_setFileEntry)
-    {
-        if(pEntry->ucFlag != FF_DELETE && pEntry->nNameHash == nNameHash)
-        {
-            return true;
-        }
-    }
-
+	FileEntry * pEntry = FindInFileCache(nNameHash);
+	if (pEntry&&pEntry->ucFlag != FF_DELETE )
+	{
+		return true;
+	}
     return false;
 }
 
 bool CAssetsPack::DelFile(const char* pszFileName)
 {
     uint nNameHash = XXHASH32(pszFileName);
+	FileEntry * pEntry = FindInFileCache(nNameHash);
 
-    FE_FOREACH(pEntry, m_setFileEntry)
-    {
-        if(pEntry->ucFlag != FF_DELETE && pEntry->nNameHash == nNameHash)
-        {
-            pEntry->ucFlag = FF_DELETE;
-            return true;
-        }
-    }
-
+	if (pEntry&&pEntry->ucFlag != FF_DELETE)
+	{
+		pEntry->ucFlag = FF_DELETE;
+		return true;
+	}
     return false;
 }
 
@@ -97,10 +97,10 @@ bool CAssetsPack::AddFile(const char* pszFileName, const uchar* pBuffer, uint nF
 
     uint nNameHash = XXHASH32(pszFileName);
 
-    FileEntry newEntry;
-    newEntry.ucFlag = FF_NORMAL;
-    newEntry.nFileSize = nFileSize;
-    newEntry.nNameHash = nNameHash;
+    FileEntry *newEntry = new FileEntry;
+    newEntry->ucFlag = FF_NORMAL;
+	newEntry->nFileSize = nFileSize;
+	newEntry->nNameHash = nNameHash;
 
     FileEntry* pDirtyEntry = GetDirtyEntry(nFileSize);
 
@@ -109,34 +109,78 @@ bool CAssetsPack::AddFile(const char* pszFileName, const uchar* pBuffer, uint nF
     {
         pDirtyEntry->ucFlag = FF_NORMAL;
         pDirtyEntry->nFileSize = nFileSize;
-        newEntry.nOffset = pDirtyEntry->nOffset;
+		newEntry->nOffset = pDirtyEntry->nOffset;
     }
 
     else
     {
         // 文件偏移放到末尾
-        newEntry.nOffset = m_packHead.nFileEntryOffset;
+		newEntry->nOffset = m_packHead.nFileEntryOffset;
         m_packHead.nFileEntryOffset += nFileSize;
-        m_setFileEntry.insert(newEntry);
+		AddToFileCache( newEntry);
         m_packHead.nFileAmount++;
     }
 
-    return nFileSize == m_pAssetsOperator->Write(pBuffer, newEntry.nOffset, nFileSize);
+    return nFileSize == m_pAssetsOperator->Write(pBuffer, newEntry->nOffset, nFileSize);
 
 }
 
 // 获取适合大小的已删除的文件位置信息
 FileEntry* CAssetsPack::GetDirtyEntry(uint nFileSize)
 {
-    FE_FOREACH(pEntry, m_setFileEntry)
-    {
-        if(pEntry->ucFlag == FF_DELETE && pEntry->nFileSize >= nFileSize)
-        {
-            return pEntry;
-        }
-    }
+	FileEntryPtr s;
+	for (s = _fileEntryCache; s != NULL; s = (FileEntryPtr)s->hh.next) {
+		FileEntry  * pEntry = s->data;
+		if (pEntry->ucFlag == FF_DELETE && pEntry->nFileSize >= nFileSize)
+		{
+			return pEntry;
+		}
+	}
+	return nullptr;
+}
 
-    return NULL;
+
+
+void CAssetsPack::AddToFileCache(FileEntry* data)
+{
+	struct UT_FileEntry_MAP *s;
+
+	s = (struct UT_FileEntry_MAP*)malloc(sizeof(struct UT_FileEntry_MAP));
+	s->id = data->nNameHash;
+	s->data = data;
+	HASH_ADD_INT(_fileEntryCache, id, s);
+}
+
+FileEntry* CAssetsPack::FindInFileCache(uint id)
+{
+	struct UT_FileEntry_MAP* s;
+	HASH_FIND_INT(_fileEntryCache, &id, s);
+	if (s)
+	{
+		return s->data;
+	}
+	return nullptr;
+}
+
+void CAssetsPack::DeleteInFileCache(uint id)
+{
+	struct UT_FileEntry_MAP* s;
+	HASH_FIND_INT(_fileEntryCache, &id, s);
+	if (s)
+	{
+		HASH_DEL(_fileEntryCache, s);
+		free(s);
+	}
+}
+
+void CAssetsPack::CleanCache() {
+	struct UT_FileEntry_MAP *current_user, *tmp;
+
+	HASH_ITER(hh, _fileEntryCache, current_user, tmp) {
+		HASH_DEL(_fileEntryCache, current_user);
+		delete current_user->data;
+		free(current_user);
+	}
 }
 
 void CAssetsPack::SavePack()
@@ -152,12 +196,12 @@ void CAssetsPack::SavePack()
     // 写入文件列表信息
     uint nEntryOffset = m_packHead.nFileEntryOffset;
     uint nEntrySize = sizeof(FileEntry);
-    FE_FOREACH(pEntry, m_setFileEntry)
-    {
-        m_pAssetsOperator->Write((const uchar*)pEntry, nEntryOffset, nEntrySize);
-        nEntryOffset += nEntrySize;
-    }
-
+	FileEntryPtr s;
+	for (s = _fileEntryCache; s != NULL; s = (FileEntryPtr)s->hh.next) {
+		FileEntry  * pEntry = s->data;
+		m_pAssetsOperator->Write((const uchar*)pEntry, nEntryOffset, nEntrySize);
+		nEntryOffset += nEntrySize;
+	}
     // 关闭文件
     m_pAssetsOperator->Close();
 }
